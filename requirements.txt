@@ -3,3 +3,4 @@ pymongo
 python-dotenv
 pandas
 openpyxl
+extra-streamlit-components
