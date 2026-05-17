@@ -3,4 +3,4 @@ pymongo
 python-dotenv
 pandas
 openpyxl
-extra-streamlit-components
+streamlit-cookies-controller
