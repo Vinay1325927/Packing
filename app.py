@@ -46,20 +46,24 @@ def load_items():
         item["id"]      = str(item["_id"])
         item["checked"] = int(item.get("checked", 0))
         item["note"]    = item.get("note", "")
-        item["budget"]  = item.get("budget", "")
+        item["budget"]  = float(item.get("budget", 0) or 0)
     return items
+
+def backfill_budget():
+    """Set budget=0 on any existing documents that don't have the field."""
+    get_col().update_many({"budget": {"$exists": False}}, {"$set": {"budget": 0.0}})
+
+def update_budget(item_id, budget):
+    get_col().update_one({"_id": ObjectId(item_id)}, {"$set": {"budget": float(budget or 0)}})
 
 def toggle_item(item_id, checked):
     get_col().update_one({"_id": ObjectId(item_id)}, {"$set": {"checked": 1 if checked else 0}})
 
-def add_item(name, category, note="", budget=""):
-    get_col().insert_one({"category": category, "name": name, "note": note, "budget": budget, "checked": 0})
+def add_item(name, category, note="", budget=0.0):
+    get_col().insert_one({"category": category, "name": name, "note": note, "checked": 0, "budget": float(budget or 0)})
 
 def delete_item(item_id):
     get_col().delete_one({"_id": ObjectId(item_id)})
-
-def update_item_fields(item_id, fields: dict):
-    get_col().update_one({"_id": ObjectId(item_id)}, {"$set": fields})
 
 def get_categories():
     return sorted(get_col().distinct("category"))
@@ -76,8 +80,8 @@ def build_excel(items):
     thin   = Side(border_style="thin", color="BBBBBB")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    headers    = ["#", "Category", "Item Name", "Note", "Budget", "Packed"]
-    col_widths = [5, 28, 35, 45, 20, 10]
+    headers    = ["#", "Category", "Item Name", "Note", "Budget (₹)", "Packed"]
+    col_widths = [5, 28, 35, 45, 14, 10]
 
     for ci, (h, w) in enumerate(zip(headers, col_widths), 1):
         cell           = ws.cell(row=1, column=ci, value=h)
@@ -104,7 +108,7 @@ def build_excel(items):
 
         for item in group_list:
             is_checked = bool(item["checked"])
-            values     = [idx, item["category"], item["name"], item["note"] or "", item.get("budget", "") or "", "✓" if is_checked else ""]
+            values     = [idx, item["category"], item["name"], item["note"] or "", item.get("budget") or "", "✓" if is_checked else ""]
             for ci, val in enumerate(values, 1):
                 cell           = ws.cell(row=row, column=ci, value=val)
                 cell.border    = border
@@ -151,9 +155,13 @@ def restore_from_excel(file):
         cat        = str(r["category"]).strip()
         name       = str(r["item name"]).strip()
         note       = "" if pd.isna(r["note"]) else str(r["note"]).strip()
-        budget     = "" if ("budget" not in r or pd.isna(r["budget"])) else str(r["budget"]).strip()
         packed_val = str(r["packed"]).strip()
         checked    = 1 if packed_val in ("✓", "checkmark", "1", "True", "true", "yes", "Yes") else 0
+        budget_raw = r.get("budget (₹)", r.get("budget", 0))
+        try:
+            budget = float(budget_raw) if not pd.isna(budget_raw) else 0.0
+        except (ValueError, TypeError):
+            budget = 0.0
         if not cat or not name:
             continue
         key = (cat.lower(), name.lower())
@@ -161,7 +169,7 @@ def restore_from_excel(file):
             duplicates.append(name)
         else:
             existing.add(key)
-            unique_rows.append({"category": cat, "name": name, "note": note, "budget": budget, "checked": checked})
+            unique_rows.append({"category": cat, "name": name, "note": note, "checked": checked, "budget": budget})
 
     if not unique_rows and not duplicates:
         return 0, "No valid data rows found in the file."
@@ -195,18 +203,6 @@ st.markdown("""
 }
 .stat-num { font-size: 22px; font-weight: 700; color: #0369A1; }
 .stat-lbl { font-size: 12px; color: #64748B; }
-.budget-total-box {
-    background: #F0FFF4; border: 1px solid #86EFAC;
-    border-radius: 10px; padding: 12px 20px;
-    margin-top: 20px; text-align: center;
-}
-.budget-total-num { font-size: 22px; font-weight: 700; color: #15803D; }
-.budget-total-lbl { font-size: 13px; color: #64748B; margin-top: 2px; }
-.editable-label {
-    cursor: pointer; border-bottom: 1px dashed #CBD5E1;
-    display: inline-block; padding: 1px 3px;
-}
-.editable-label:hover { background: #F1F5F9; border-radius: 3px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -353,12 +349,12 @@ def main_app():
             else:
                 new_cat = cat_choice
             new_note = st.text_input("Note (optional)", key="new_note", placeholder="e.g. 2 pcs, buy in India")
-            new_budget = st.text_input("Budget (optional)", key="new_budget", placeholder="e.g. ₹500, AMAZON20")
+            new_budget = st.number_input("Budget (₹, optional)", key="new_budget", min_value=0.0, step=100.0, value=0.0)
             c1, c2 = st.columns([1, 5])
             with c1:
                 if st.button("Save item", type="primary"):
                     if new_name.strip() and new_cat.strip():
-                        add_item(new_name.strip(), new_cat.strip(), new_note.strip(), new_budget.strip())
+                        add_item(new_name.strip(), new_cat.strip(), new_note.strip(), new_budget)
                         st.session_state["show_add"] = False
                         for k in ["new_name", "new_note", "new_cat", "cat_choice", "new_budget"]:
                             st.session_state.pop(k, None)
@@ -375,11 +371,16 @@ def main_app():
     total     = len(items_all)
     packed    = sum(1 for i in items_all if i["checked"])
     pct       = int(packed / total * 100) if total else 0
-    s1, s2, s3, s4 = st.columns(4)
+    total_budget  = sum(i.get("budget", 0) or 0 for i in items_all)
+    packed_budget = sum(i.get("budget", 0) or 0 for i in items_all if i["checked"])
+    s1, s2, s3, s4, s5 = st.columns(5)
     with s1: st.markdown(f"<div class='stat-box'><div class='stat-num'>{total}</div><div class='stat-lbl'>Total items</div></div>", unsafe_allow_html=True)
     with s2: st.markdown(f"<div class='stat-box'><div class='stat-num'>{packed}</div><div class='stat-lbl'>Packed ✓</div></div>", unsafe_allow_html=True)
     with s3: st.markdown(f"<div class='stat-box'><div class='stat-num'>{total-packed}</div><div class='stat-lbl'>Remaining</div></div>", unsafe_allow_html=True)
     with s4: st.markdown(f"<div class='stat-box'><div class='stat-num'>{pct}%</div><div class='stat-lbl'>Complete</div></div>", unsafe_allow_html=True)
+    with s5:
+        budget_display = f"₹{packed_budget:,.0f} / ₹{total_budget:,.0f}" if total_budget else "—"
+        st.markdown(f"<div class='stat-box'><div class='stat-num' style='font-size:16px;'>{budget_display}</div><div class='stat-lbl'>Budget (spent/total)</div></div>", unsafe_allow_html=True)
     st.progress(pct / 100)
     st.markdown("")
 
@@ -399,19 +400,6 @@ def main_app():
         st.info("No items found. Try adjusting your filters.")
         return
 
-    # ── Helper: parse numeric budget ──────────────────────────────────────────
-    def parse_numeric(val):
-        """Strip currency symbols and return float if purely numeric, else None."""
-        if not val:
-            return None
-        cleaned = val.strip().lstrip("₹$€£¥").strip().replace(",", "")
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
-
-    total_budget_numeric = 0.0
-
     for cat, group in groupby(items_sorted, key=lambda x: x["category"]):
         group_list     = list(group)
         checked_in_cat = sum(1 for i in group_list if i["checked"])
@@ -421,106 +409,45 @@ def main_app():
             unsafe_allow_html=True
         )
         for item in group_list:
-            iid      = item["id"]
-            is_checked = bool(item["checked"])
-
-            # Accumulate numeric budgets for total
-            bval = parse_numeric(item.get("budget", ""))
-            if bval is not None:
-                total_budget_numeric += bval
-
-            editing = st.session_state.get(f"editing_{iid}", False)
-            bg      = "background:#F0FDF4;" if is_checked else "background:#FAFAFA;"
-
-            col_chk, col_info, col_del = st.columns([0.5, 9, 0.5])
-
+            col_chk, col_info, col_budget, col_del = st.columns([0.5, 7, 2, 0.5])
             with col_chk:
                 checked = st.checkbox(
-                    label="packed", value=is_checked,
-                    key=f"chk_{iid}", label_visibility="collapsed"
+                    label="packed", value=bool(item["checked"]),
+                    key=f"chk_{item['id']}", label_visibility="collapsed"
                 )
-                if checked != is_checked:
-                    toggle_item(iid, checked)
+                if checked != bool(item["checked"]):
+                    toggle_item(item["id"], checked)
                     st.rerun()
-
             with col_info:
-                if editing:
-                    # ── Edit mode: all 3 fields inline in one row ──────────────
-                    ec_name, ec_note, ec_budget, ec_save, ec_cancel = st.columns([3, 3, 2, 1, 1])
-                    with ec_name:
-                        new_name_val = st.text_input(
-                            "Name", value=item["name"],
-                            key=f"inp_name_{iid}", label_visibility="visible"
-                        )
-                    with ec_note:
-                        new_note_val = st.text_input(
-                            "Note", value=item.get("note", ""),
-                            key=f"inp_note_{iid}", label_visibility="visible",
-                            placeholder="Add a note..."
-                        )
-                    with ec_budget:
-                        new_budget_val = st.text_input(
-                            "Budget", value=item.get("budget", ""),
-                            key=f"inp_budget_{iid}", label_visibility="visible",
-                            placeholder="e.g. ₹500"
-                        )
-                    with ec_save:
-                        st.markdown("<div style='margin-top:24px'>", unsafe_allow_html=True)
-                        if st.button("💾", key=f"save_{iid}", help="Save changes"):
-                            fields = {"note": new_note_val.strip(), "budget": new_budget_val.strip()}
-                            if new_name_val.strip():
-                                fields["name"] = new_name_val.strip()
-                            update_item_fields(iid, fields)
-                            st.session_state[f"editing_{iid}"] = False
-                            st.rerun()
-                        st.markdown("</div>", unsafe_allow_html=True)
-                    with ec_cancel:
-                        st.markdown("<div style='margin-top:24px'>", unsafe_allow_html=True)
-                        if st.button("✕", key=f"cancel_{iid}", help="Cancel"):
-                            st.session_state[f"editing_{iid}"] = False
-                            st.rerun()
-                        st.markdown("</div>", unsafe_allow_html=True)
-                else:
-                    # ── Display mode: single row, click any text to edit ───────
-                    name_style   = "color:#6B7280;text-decoration:line-through;" if is_checked else "color:#111827;font-weight:500;"
-                    note_display = item.get("note") or "<span style='color:#CBD5E1'>add note</span>"
-                    note_style   = "color:#6B7280;" if item.get("note") else "color:#CBD5E1;font-style:italic;"
-                    budget_val   = item.get("budget") or ""
-                    budget_display = budget_val if budget_val else "<span style='color:#CBD5E1'>budget</span>"
-                    budget_style = "color:#059669;font-weight:500;" if budget_val else "color:#CBD5E1;font-style:italic;"
-
-                    st.markdown(
-                        f"""<div style='display:flex;align-items:center;gap:16px;padding:7px 10px;
-                            border-radius:7px;{bg}cursor:pointer;border:1px solid transparent;'
-                            title='Click ✏️ to edit'>
-                            <span style='font-size:14px;{name_style};min-width:120px;'>{item['name']}</span>
-                            <span style='font-size:12px;{note_style};min-width:100px;'>📝 {note_display}</span>
-                            <span style='font-size:12px;{budget_style};min-width:80px;'>💰 {budget_display}</span>
-                        </div>""",
-                        unsafe_allow_html=True
-                    )
-                    if st.button("✏️ Edit", key=f"edit_btn_{iid}", help="Click to edit name, note or budget"):
-                        st.session_state[f"editing_{iid}"] = True
-                        st.rerun()
-
+                name_style = "color:#6B7280;text-decoration:line-through;" if item["checked"] else "color:#111827;"
+                note_html  = f"<span style='font-size:12px;color:#9CA3AF;'> — {item['note']}</span>" if item["note"] else ""
+                bg         = "background:#F0FDF4;" if item["checked"] else ""
+                st.markdown(
+                    f"<div style='padding:6px 8px;border-radius:6px;{bg}'>"
+                    f"<span style='font-size:14px;{name_style}'>{item['name']}</span>{note_html}"
+                    f"</div>", unsafe_allow_html=True
+                )
+            with col_budget:
+                new_bud = st.number_input(
+                    "₹", min_value=0.0, step=100.0,
+                    value=float(item.get("budget") or 0),
+                    key=f"bud_{item['id']}", label_visibility="collapsed",
+                    placeholder="₹ Budget"
+                )
+                if new_bud != float(item.get("budget") or 0):
+                    update_budget(item["id"], new_bud)
+                    st.rerun()
             with col_del:
-                if not editing:
-                    if st.button("🗑", key=f"del_{iid}", help="Delete item"):
-                        delete_item(iid)
-                        st.rerun()
-
-    # ── Total Budget ───────────────────────────────────────────────────────────
-    st.markdown(
-        f"<div class='budget-total-box'>"
-        f"<div class='budget-total-num'>₹ {total_budget_numeric:,.2f}</div>"
-        f"<div class='budget-total-lbl'>Total Budget (numeric values only)</div>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
+                if st.button("🗑", key=f"del_{item['id']}", help="Delete item"):
+                    delete_item(item["id"])
+                    st.rerun()
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+
+# Backfill budget=0 on any pre-existing items that lack the field
+backfill_budget()
 
 # Try to restore session from cookie before deciding what to render
 check_remember_me_cookie()
