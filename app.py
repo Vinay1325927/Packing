@@ -31,12 +31,8 @@ COOKIE_EXPIRY = 30  # days
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Study Abroad Packing List", page_icon="🧳", layout="wide")
 
-# ── Cookie manager (cached so it's one instance per session) ──────────────────
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+# ── Cookie manager ────────────────────────────────────────────────────────────
+cookie_manager = stx.CookieManager()
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 @st.cache_resource
