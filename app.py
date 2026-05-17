@@ -29,7 +29,7 @@ COOKIE_NAME   = "packing_list_user"
 COOKIE_EXPIRY = 30  # days
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Study Abroad Packing List", page_icon="🧳", layout="wide")
+st.set_page_config(page_title="Packing List", page_icon="🧳", layout="wide")
 
 # ── Cookie manager ────────────────────────────────────────────────────────────
 cookie_manager = CookieController()
