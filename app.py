@@ -421,106 +421,93 @@ def main_app():
             unsafe_allow_html=True
         )
         for item in group_list:
-            iid = item["id"]
+            iid      = item["id"]
+            is_checked = bool(item["checked"])
 
             # Accumulate numeric budgets for total
             bval = parse_numeric(item.get("budget", ""))
             if bval is not None:
                 total_budget_numeric += bval
 
+            editing = st.session_state.get(f"editing_{iid}", False)
+            bg      = "background:#F0FDF4;" if is_checked else "background:#FAFAFA;"
+
             col_chk, col_info, col_del = st.columns([0.5, 9, 0.5])
+
             with col_chk:
                 checked = st.checkbox(
-                    label="packed", value=bool(item["checked"]),
+                    label="packed", value=is_checked,
                     key=f"chk_{iid}", label_visibility="collapsed"
                 )
-                if checked != bool(item["checked"]):
+                if checked != is_checked:
                     toggle_item(iid, checked)
                     st.rerun()
 
             with col_info:
-                name_style = "color:#6B7280;text-decoration:line-through;" if item["checked"] else "color:#111827;"
-                bg         = "background:#F0FDF4;" if item["checked"] else ""
-
-                # ── Name edit ──
-                if st.session_state.get(f"edit_name_{iid}"):
-                    ec1, ec2 = st.columns([4, 1])
-                    with ec1:
+                if editing:
+                    # ── Edit mode: all 3 fields inline in one row ──────────────
+                    ec_name, ec_note, ec_budget, ec_save, ec_cancel = st.columns([3, 3, 2, 1, 1])
+                    with ec_name:
                         new_name_val = st.text_input(
                             "Name", value=item["name"],
-                            key=f"inp_name_{iid}", label_visibility="collapsed"
+                            key=f"inp_name_{iid}", label_visibility="visible"
                         )
-                    with ec2:
-                        if st.button("💾 Save", key=f"save_name_{iid}"):
-                            if new_name_val.strip():
-                                update_item_fields(iid, {"name": new_name_val.strip()})
-                            st.session_state[f"edit_name_{iid}"] = False
-                            st.rerun()
-                else:
-                    st.markdown(
-                        f"<div style='padding:2px 0;'>"
-                        f"<span class='editable-label' style='font-size:14px;{name_style}' "
-                        f"title='Click edit button to rename'>{item['name']}</span>"
-                        f"</div>", unsafe_allow_html=True
-                    )
-                    if st.button("✏️", key=f"edit_name_btn_{iid}", help="Edit item name"):
-                        st.session_state[f"edit_name_{iid}"] = True
-                        st.rerun()
-
-                # ── Note edit ──
-                if st.session_state.get(f"edit_note_{iid}"):
-                    ec1, ec2 = st.columns([4, 1])
-                    with ec1:
+                    with ec_note:
                         new_note_val = st.text_input(
                             "Note", value=item.get("note", ""),
-                            key=f"inp_note_{iid}", label_visibility="collapsed",
+                            key=f"inp_note_{iid}", label_visibility="visible",
                             placeholder="Add a note..."
                         )
-                    with ec2:
-                        if st.button("💾 Save", key=f"save_note_{iid}"):
-                            update_item_fields(iid, {"note": new_note_val.strip()})
-                            st.session_state[f"edit_note_{iid}"] = False
-                            st.rerun()
-                else:
-                    note_display = item.get("note", "") or "—"
-                    note_color   = "#9CA3AF" if not item.get("note") else "#6B7280"
-                    st.markdown(
-                        f"<span style='font-size:12px;color:{note_color};'>"
-                        f"📝 {note_display}</span>", unsafe_allow_html=True
-                    )
-                    if st.button("✏️", key=f"edit_note_btn_{iid}", help="Edit note"):
-                        st.session_state[f"edit_note_{iid}"] = True
-                        st.rerun()
-
-                # ── Budget edit ──
-                if st.session_state.get(f"edit_budget_{iid}"):
-                    ec1, ec2 = st.columns([4, 1])
-                    with ec1:
+                    with ec_budget:
                         new_budget_val = st.text_input(
                             "Budget", value=item.get("budget", ""),
-                            key=f"inp_budget_{iid}", label_visibility="collapsed",
-                            placeholder="e.g. ₹500, VOUCHER20"
+                            key=f"inp_budget_{iid}", label_visibility="visible",
+                            placeholder="e.g. ₹500"
                         )
-                    with ec2:
-                        if st.button("💾 Save", key=f"save_budget_{iid}"):
-                            update_item_fields(iid, {"budget": new_budget_val.strip()})
-                            st.session_state[f"edit_budget_{iid}"] = False
+                    with ec_save:
+                        st.markdown("<div style='margin-top:24px'>", unsafe_allow_html=True)
+                        if st.button("💾", key=f"save_{iid}", help="Save changes"):
+                            fields = {"note": new_note_val.strip(), "budget": new_budget_val.strip()}
+                            if new_name_val.strip():
+                                fields["name"] = new_name_val.strip()
+                            update_item_fields(iid, fields)
+                            st.session_state[f"editing_{iid}"] = False
                             st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    with ec_cancel:
+                        st.markdown("<div style='margin-top:24px'>", unsafe_allow_html=True)
+                        if st.button("✕", key=f"cancel_{iid}", help="Cancel"):
+                            st.session_state[f"editing_{iid}"] = False
+                            st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
                 else:
-                    budget_display = item.get("budget", "") or "—"
-                    budget_color   = "#9CA3AF" if not item.get("budget") else "#059669"
+                    # ── Display mode: single row, click any text to edit ───────
+                    name_style   = "color:#6B7280;text-decoration:line-through;" if is_checked else "color:#111827;font-weight:500;"
+                    note_display = item.get("note") or "<span style='color:#CBD5E1'>add note</span>"
+                    note_style   = "color:#6B7280;" if item.get("note") else "color:#CBD5E1;font-style:italic;"
+                    budget_val   = item.get("budget") or ""
+                    budget_display = budget_val if budget_val else "<span style='color:#CBD5E1'>budget</span>"
+                    budget_style = "color:#059669;font-weight:500;" if budget_val else "color:#CBD5E1;font-style:italic;"
+
                     st.markdown(
-                        f"<span style='font-size:12px;color:{budget_color};'>"
-                        f"💰 {budget_display}</span>", unsafe_allow_html=True
+                        f"""<div style='display:flex;align-items:center;gap:16px;padding:7px 10px;
+                            border-radius:7px;{bg}cursor:pointer;border:1px solid transparent;'
+                            title='Click ✏️ to edit'>
+                            <span style='font-size:14px;{name_style};min-width:120px;'>{item['name']}</span>
+                            <span style='font-size:12px;{note_style};min-width:100px;'>📝 {note_display}</span>
+                            <span style='font-size:12px;{budget_style};min-width:80px;'>💰 {budget_display}</span>
+                        </div>""",
+                        unsafe_allow_html=True
                     )
-                    if st.button("✏️", key=f"edit_budget_btn_{iid}", help="Edit budget"):
-                        st.session_state[f"edit_budget_{iid}"] = True
+                    if st.button("✏️ Edit", key=f"edit_btn_{iid}", help="Click to edit name, note or budget"):
+                        st.session_state[f"editing_{iid}"] = True
                         st.rerun()
 
             with col_del:
-                if st.button("🗑", key=f"del_{iid}", help="Delete item"):
-                    delete_item(iid)
-                    st.rerun()
+                if not editing:
+                    if st.button("🗑", key=f"del_{iid}", help="Delete item"):
+                        delete_item(iid)
+                        st.rerun()
 
     # ── Total Budget ───────────────────────────────────────────────────────────
     st.markdown(
