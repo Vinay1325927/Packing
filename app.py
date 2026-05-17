@@ -9,6 +9,7 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from pymongo import MongoClient
 from bson import ObjectId
+import extra_streamlit_components as stx
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
 load_dotenv("credentials/.env")
@@ -24,8 +25,18 @@ USERS = {
     STUDENT_USER: STUDENT_PASS,
 }
 
+COOKIE_NAME   = "packing_list_user"
+COOKIE_EXPIRY = 30  # days
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Study Abroad Packing List", page_icon="🧳", layout="wide")
+
+# ── Cookie manager (cached so it's one instance per session) ──────────────────
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -186,6 +197,32 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── Cookie-based auto-login ───────────────────────────────────────────────────
+def check_remember_me_cookie():
+    """Read cookie on page load and restore session if valid."""
+    if st.session_state.get("logged_in"):
+        return  # already logged in this session
+    try:
+        saved_user = cookie_manager.get(COOKIE_NAME)
+        if saved_user and saved_user in USERS:
+            st.session_state["logged_in"] = True
+            st.session_state["username"]  = saved_user
+    except Exception:
+        pass  # cookie not readable yet — Streamlit hasn't rendered the component
+
+def set_remember_me_cookie(username):
+    cookie_manager.set(
+        COOKIE_NAME,
+        username,
+        max_age=COOKIE_EXPIRY * 24 * 60 * 60,  # seconds
+    )
+
+def clear_remember_me_cookie():
+    try:
+        cookie_manager.delete(COOKIE_NAME)
+    except Exception:
+        pass
+
 # ── Login ─────────────────────────────────────────────────────────────────────
 def login_screen():
     st.markdown("""
@@ -199,12 +236,17 @@ def login_screen():
     with col:
         with st.container(border=True):
             st.markdown("### Sign in")
-            username = st.text_input("Username", placeholder="Enter username")
-            password = st.text_input("Password", type="password", placeholder="Enter password")
+            username    = st.text_input("Username", placeholder="Enter username")
+            password    = st.text_input("Password", type="password", placeholder="Enter password")
+            remember_me = st.checkbox("Remember me on this device", value=True)
             if st.button("Sign in", use_container_width=True, type="primary"):
                 if username in USERS and USERS[username] == password:
                     st.session_state["logged_in"] = True
                     st.session_state["username"]  = username
+                    if remember_me:
+                        set_remember_me_cookie(username)
+                    else:
+                        clear_remember_me_cookie()
                     st.rerun()
                 else:
                     st.error("Incorrect username or password.")
@@ -248,6 +290,7 @@ def main_app():
 
         st.markdown("---")
         if st.button("🚪 Sign out", use_container_width=True):
+            clear_remember_me_cookie()
             st.session_state.clear()
             st.rerun()
 
@@ -365,6 +408,9 @@ def main_app():
 # ── Entry point ───────────────────────────────────────────────────────────────
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+
+# Try to restore session from cookie before deciding what to render
+check_remember_me_cookie()
 
 if not st.session_state["logged_in"]:
     login_screen()
