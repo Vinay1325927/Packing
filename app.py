@@ -29,7 +29,7 @@ COOKIE_NAME   = "packing_list_user"
 COOKIE_EXPIRY = 30  # days
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Packing List", page_icon="🧳", layout="wide")
+st.set_page_config(page_title="Study Abroad Packing List", page_icon="🧳", layout="wide")
 
 # ── Cookie manager ────────────────────────────────────────────────────────────
 cookie_manager = CookieController()
@@ -46,15 +46,18 @@ def load_items():
         item["id"]      = str(item["_id"])
         item["checked"] = int(item.get("checked", 0))
         item["note"]    = item.get("note", "")
-        item["budget"]  = float(item.get("budget", 0) or 0)
+        item["budget"]  = item.get("budget", "") or ""
     return items
 
 def backfill_budget():
     """Set budget=0 on any existing documents that don't have the field."""
     get_col().update_many({"budget": {"$exists": False}}, {"$set": {"budget": 0.0}})
 
+def update_item(item_id, name, category, note):
+    get_col().update_one({"_id": ObjectId(item_id)}, {"$set": {"name": name, "category": category, "note": note}})
+
 def update_budget(item_id, budget):
-    get_col().update_one({"_id": ObjectId(item_id)}, {"$set": {"budget": float(budget or 0)}})
+    get_col().update_one({"_id": ObjectId(item_id)}, {"$set": {"budget": budget}})
 
 def toggle_item(item_id, checked):
     get_col().update_one({"_id": ObjectId(item_id)}, {"$set": {"checked": 1 if checked else 0}})
@@ -108,7 +111,7 @@ def build_excel(items):
 
         for item in group_list:
             is_checked = bool(item["checked"])
-            values     = [idx, item["category"], item["name"], item["note"] or "", item.get("budget") or "", "✓" if is_checked else ""]
+            values     = [idx, item["category"], item["name"], item["note"] or "", str(item.get("budget") or ""), "✓" if is_checked else ""]
             for ci, val in enumerate(values, 1):
                 cell           = ws.cell(row=row, column=ci, value=val)
                 cell.border    = border
@@ -277,37 +280,27 @@ def main_app():
     with st.sidebar:
         st.markdown(f"👤 **{st.session_state['username']}**")
         st.markdown("---")
-        st.markdown("### 🔍 Filter")
-        cats         = ["All"] + get_categories()
-        selected_cat = st.selectbox("Category", cats, label_visibility="collapsed")
-        search       = st.text_input("Search items", placeholder="🔍 Type to search...")
-        st.markdown("---")
-        show_only_packed   = st.checkbox("Show only packed items")
-        show_only_unpacked = st.checkbox("Show only unpacked items")
-        st.markdown("---")
-        st.markdown("### 💾 Backup & Restore")
 
-        _items_for_backup = load_items()
-        _excel_backup     = build_excel(_items_for_backup)
-        st.download_button(
-            label="⬇️ Download checkpoint", data=_excel_backup,
-            file_name="packing_list_backup.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+        view = st.radio(
+            "Navigation",
+            ["🧳 Packing List", "✏️ Update List", "💾 Backup & Restore"],
+            label_visibility="collapsed"
         )
+        st.session_state["view"] = view
 
-        uploaded = st.file_uploader("⬆️ Restore from checkpoint", type=["xlsx"])
-        if uploaded:
-            if st.button("✅ Confirm restore", use_container_width=True, type="primary"):
-                n, msg = restore_from_excel(uploaded)
-                if n == 0 and msg.startswith(("Could not", "Missing", "No valid")):
-                    st.error(f"Restore failed: {msg}")
-                else:
-                    if n > 0:
-                        st.success(f"Restored {n} new item(s) successfully!")
-                    if msg:
-                        st.warning(msg)
-                    st.rerun()
+        st.markdown("---")
+
+        if view == "🧳 Packing List":
+            st.markdown("### 🔍 Filter")
+            cats         = ["All"] + get_categories()
+            selected_cat = st.selectbox("Category", cats, label_visibility="collapsed")
+            search       = st.text_input("Search items", placeholder="🔍 Type to search...")
+            st.markdown("---")
+            show_only_packed   = st.checkbox("Show only packed items")
+            show_only_unpacked = st.checkbox("Show only unpacked items")
+        else:
+            selected_cat, search = "All", ""
+            show_only_packed = show_only_unpacked = False
 
         st.markdown("---")
         if st.button("🚪 Sign out", use_container_width=True):
@@ -315,132 +308,232 @@ def main_app():
             st.session_state.clear()
             st.rerun()
 
-    col_title, col_add, col_dl = st.columns([3, 1, 1])
-    with col_title:
-        st.markdown("# 🧳 Packing List")
-    with col_add:
-        st.markdown("<div style='margin-top:14px'>", unsafe_allow_html=True)
-        if st.button("➕ Add item", use_container_width=True):
-            st.session_state["show_add"] = not st.session_state.get("show_add", False)
-        st.markdown("</div>", unsafe_allow_html=True)
-    with col_dl:
-        st.markdown("<div style='margin-top:14px'>", unsafe_allow_html=True)
-        items_all = load_items()
-        excel_buf = build_excel(items_all)
-        st.download_button(
-            label="📥 Save to Excel", data=excel_buf, file_name="packing_list.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+    # ── 🧳 Packing List view ──────────────────────────────────────────────────
+    if view == "🧳 Packing List":
+        col_title, col_add, col_dl = st.columns([3, 1, 1])
+        with col_title:
+            st.markdown("# 🧳 Packing List")
+        with col_add:
+            st.markdown("<div style='margin-top:14px'>", unsafe_allow_html=True)
+            if st.button("➕ Add item", use_container_width=True):
+                st.session_state["show_add"] = not st.session_state.get("show_add", False)
+            st.markdown("</div>", unsafe_allow_html=True)
+        with col_dl:
+            st.markdown("<div style='margin-top:14px'>", unsafe_allow_html=True)
+            items_all = load_items()
+            excel_buf = build_excel(items_all)
+            st.download_button(
+                label="📥 Save to Excel", data=excel_buf, file_name="packing_list.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.session_state.get("show_add", False):
-        with st.container(border=True):
-            st.markdown("#### ➕ Add a new item")
-            fc1, fc2 = st.columns(2)
-            with fc1:
-                new_name = st.text_input("Item name *", key="new_name", placeholder="e.g. Laptop charger")
-            with fc2:
-                existing_cats = get_categories()
-                cat_options   = existing_cats + ["+ New category..."]
-                cat_choice    = st.selectbox("Category *", cat_options, key="cat_choice")
-            if cat_choice == "+ New category...":
-                new_cat = st.text_input("New category name *", key="new_cat")
-            else:
-                new_cat = cat_choice
-            new_note = st.text_input("Note (optional)", key="new_note", placeholder="e.g. 2 pcs, buy in India")
-            new_budget = st.number_input("Budget (₹, optional)", key="new_budget", min_value=0.0, step=100.0, value=0.0)
-            c1, c2 = st.columns([1, 5])
-            with c1:
-                if st.button("Save item", type="primary"):
-                    if new_name.strip() and new_cat.strip():
-                        add_item(new_name.strip(), new_cat.strip(), new_note.strip(), new_budget)
+        if st.session_state.get("show_add", False):
+            with st.container(border=True):
+                st.markdown("#### ➕ Add a new item")
+                fc1, fc2 = st.columns(2)
+                with fc1:
+                    new_name = st.text_input("Item name *", key="new_name", placeholder="e.g. Laptop charger")
+                with fc2:
+                    existing_cats = get_categories()
+                    cat_options   = existing_cats + ["+ New category..."]
+                    cat_choice    = st.selectbox("Category *", cat_options, key="cat_choice")
+                if cat_choice == "+ New category...":
+                    new_cat = st.text_input("New category name *", key="new_cat")
+                else:
+                    new_cat = cat_choice
+                new_note   = st.text_input("Note (optional)", key="new_note", placeholder="e.g. 2 pcs, buy in India")
+                new_budget = st.text_input("Budget (optional)", key="new_budget", placeholder="₹ amount or note")
+                c1, c2 = st.columns([1, 5])
+                with c1:
+                    if st.button("Save item", type="primary"):
+                        if new_name.strip() and new_cat.strip():
+                            add_item(new_name.strip(), new_cat.strip(), new_note.strip(), new_budget.strip())
+                            st.session_state["show_add"] = False
+                            for k in ["new_name", "new_note", "new_cat", "cat_choice", "new_budget"]:
+                                st.session_state.pop(k, None)
+                            st.success(f"'{new_name}' added!")
+                            st.rerun()
+                        else:
+                            st.error("Item name and category are required.")
+                with c2:
+                    if st.button("Cancel"):
                         st.session_state["show_add"] = False
-                        for k in ["new_name", "new_note", "new_cat", "cat_choice", "new_budget"]:
-                            st.session_state.pop(k, None)
-                        st.success(f"'{new_name}' added!")
                         st.rerun()
+
+        items_all = load_items()
+        total     = len(items_all)
+        packed    = sum(1 for i in items_all if i["checked"])
+        pct       = int(packed / total * 100) if total else 0
+        def to_num(v):
+            try: return float(v)
+            except (TypeError, ValueError): return 0.0
+
+        total_budget  = sum(to_num(i.get("budget")) for i in items_all)
+        packed_budget = sum(to_num(i.get("budget")) for i in items_all if i["checked"])
+        s1, s2, s3, s4, s5 = st.columns(5)
+        with s1: st.markdown(f"<div class='stat-box'><div class='stat-num'>{total}</div><div class='stat-lbl'>Total items</div></div>", unsafe_allow_html=True)
+        with s2: st.markdown(f"<div class='stat-box'><div class='stat-num'>{packed}</div><div class='stat-lbl'>Packed ✓</div></div>", unsafe_allow_html=True)
+        with s3: st.markdown(f"<div class='stat-box'><div class='stat-num'>{total-packed}</div><div class='stat-lbl'>Remaining</div></div>", unsafe_allow_html=True)
+        with s4: st.markdown(f"<div class='stat-box'><div class='stat-num'>{pct}%</div><div class='stat-lbl'>Complete</div></div>", unsafe_allow_html=True)
+        with s5:
+            budget_display = f"₹{packed_budget:,.0f} / ₹{total_budget:,.0f}" if total_budget else "—"
+            st.markdown(f"<div class='stat-box'><div class='stat-num' style='font-size:16px;'>{budget_display}</div><div class='stat-lbl'>Budget (spent/total)</div></div>", unsafe_allow_html=True)
+        st.progress(pct / 100)
+        st.markdown("")
+
+        items = items_all
+        if selected_cat != "All":
+            items = [i for i in items if i["category"] == selected_cat]
+        if search:
+            q     = search.lower()
+            items = [i for i in items if q in i["name"].lower() or q in (i["note"] or "").lower()]
+        if show_only_packed:
+            items = [i for i in items if i["checked"]]
+        if show_only_unpacked:
+            items = [i for i in items if not i["checked"]]
+
+        items_sorted = sorted(items, key=lambda x: (x["category"], x["name"]))
+        if not items_sorted:
+            st.info("No items found. Try adjusting your filters.")
+            return
+
+        h1, h2, h3, h4 = st.columns([0.5, 7, 2, 0.5])
+        with h2: st.markdown("<span style='font-size:12px;color:#9CA3AF;font-weight:600;padding-left:8px;'>ITEM</span>", unsafe_allow_html=True)
+        with h3: st.markdown("<span style='font-size:12px;color:#9CA3AF;font-weight:600;'>BUDGET</span>", unsafe_allow_html=True)
+
+        for cat, group in groupby(items_sorted, key=lambda x: x["category"]):
+            group_list     = list(group)
+            checked_in_cat = sum(1 for i in group_list if i["checked"])
+            st.markdown(
+                f"<div class='cat-header'>{cat} &nbsp;"
+                f"<span style='font-weight:400;font-size:13px;color:#6B7280;'>{checked_in_cat}/{len(group_list)} packed</span></div>",
+                unsafe_allow_html=True
+            )
+            for item in group_list:
+                col_chk, col_info, col_budget, col_del = st.columns([0.5, 7, 2, 0.5])
+                with col_chk:
+                    checked = st.checkbox(
+                        label="packed", value=bool(item["checked"]),
+                        key=f"chk_{item['id']}", label_visibility="collapsed"
+                    )
+                    if checked != bool(item["checked"]):
+                        toggle_item(item["id"], checked)
+                        st.rerun()
+                with col_info:
+                    name_style = "color:#6B7280;text-decoration:line-through;" if item["checked"] else "color:#111827;"
+                    note_html  = f"<span style='font-size:12px;color:#9CA3AF;'> — {item['note']}</span>" if item["note"] else ""
+                    bg         = "background:#F0FDF4;" if item["checked"] else ""
+                    st.markdown(
+                        f"<div style='padding:6px 8px;border-radius:6px;{bg}'>"
+                        f"<span style='font-size:14px;{name_style}'>{item['name']}</span>{note_html}"
+                        f"</div>", unsafe_allow_html=True
+                    )
+                with col_budget:
+                    current_bud = str(item.get("budget") or "")
+                    new_bud = st.text_input(
+                        "Budget", value=current_bud,
+                        key=f"bud_{item['id']}",
+                        label_visibility="collapsed",
+                        placeholder="₹ budget or note"
+                    )
+                    if new_bud != current_bud:
+                        update_budget(item["id"], new_bud)
+                        st.rerun()
+                with col_del:
+                    if st.button("🗑", key=f"del_{item['id']}", help="Delete item"):
+                        delete_item(item["id"])
+                        st.rerun()
+
+    # ── ✏️ Update List view ───────────────────────────────────────────────────
+    elif view == "✏️ Update List":
+        st.markdown("# ✏️ Update List")
+        st.markdown("Edit the name, category, or note of any item.")
+        st.markdown("")
+
+        items_all    = load_items()
+        items_sorted = sorted(items_all, key=lambda x: (x["category"], x["name"]))
+        if not items_sorted:
+            st.info("No items yet.")
+            return
+
+        existing_cats = get_categories()
+
+        for cat, group in groupby(items_sorted, key=lambda x: x["category"]):
+            st.markdown(f"<div class='cat-header'>{cat}</div>", unsafe_allow_html=True)
+            for item in list(group):
+                with st.container(border=True):
+                    e1, e2 = st.columns(2)
+                    with e1:
+                        ed_name = st.text_input(
+                            "Item name", value=item["name"],
+                            key=f"ed_name_{item['id']}"
+                        )
+                    with e2:
+                        cat_opts   = existing_cats + (["+ New category..."] if item["category"] in existing_cats else [])
+                        default_ix = cat_opts.index(item["category"]) if item["category"] in cat_opts else 0
+                        ed_cat_sel = st.selectbox(
+                            "Category", cat_opts,
+                            index=default_ix, key=f"ed_catsel_{item['id']}"
+                        )
+                    if ed_cat_sel == "+ New category...":
+                        ed_cat = st.text_input("New category name", key=f"ed_newcat_{item['id']}")
                     else:
-                        st.error("Item name and category are required.")
-            with c2:
-                if st.button("Cancel"):
-                    st.session_state["show_add"] = False
-                    st.rerun()
+                        ed_cat = ed_cat_sel
+                    ed_note = st.text_input(
+                        "Note", value=item.get("note", ""),
+                        key=f"ed_note_{item['id']}",
+                        placeholder="Optional note"
+                    )
+                    sv1, sv2 = st.columns([1, 6])
+                    with sv1:
+                        if st.button("💾 Save", key=f"ed_save_{item['id']}", type="primary"):
+                            if ed_name.strip() and ed_cat.strip():
+                                update_item(item["id"], ed_name.strip(), ed_cat.strip(), ed_note.strip())
+                                st.success(f"Updated '{ed_name}'!")
+                                st.rerun()
+                            else:
+                                st.error("Name and category are required.")
+                    with sv2:
+                        if st.button("🗑 Delete", key=f"ed_del_{item['id']}"):
+                            delete_item(item["id"])
+                            st.rerun()
 
-    items_all = load_items()
-    total     = len(items_all)
-    packed    = sum(1 for i in items_all if i["checked"])
-    pct       = int(packed / total * 100) if total else 0
-    total_budget  = sum(i.get("budget", 0) or 0 for i in items_all)
-    packed_budget = sum(i.get("budget", 0) or 0 for i in items_all if i["checked"])
-    s1, s2, s3, s4, s5 = st.columns(5)
-    with s1: st.markdown(f"<div class='stat-box'><div class='stat-num'>{total}</div><div class='stat-lbl'>Total items</div></div>", unsafe_allow_html=True)
-    with s2: st.markdown(f"<div class='stat-box'><div class='stat-num'>{packed}</div><div class='stat-lbl'>Packed ✓</div></div>", unsafe_allow_html=True)
-    with s3: st.markdown(f"<div class='stat-box'><div class='stat-num'>{total-packed}</div><div class='stat-lbl'>Remaining</div></div>", unsafe_allow_html=True)
-    with s4: st.markdown(f"<div class='stat-box'><div class='stat-num'>{pct}%</div><div class='stat-lbl'>Complete</div></div>", unsafe_allow_html=True)
-    with s5:
-        budget_display = f"₹{packed_budget:,.0f} / ₹{total_budget:,.0f}" if total_budget else "—"
-        st.markdown(f"<div class='stat-box'><div class='stat-num' style='font-size:16px;'>{budget_display}</div><div class='stat-lbl'>Budget (spent/total)</div></div>", unsafe_allow_html=True)
-    st.progress(pct / 100)
-    st.markdown("")
+    # ── 💾 Backup & Restore view ──────────────────────────────────────────────
+    elif view == "💾 Backup & Restore":
+        st.markdown("# 💾 Backup & Restore")
+        st.markdown("")
 
-    items = items_all
-    if selected_cat != "All":
-        items = [i for i in items if i["category"] == selected_cat]
-    if search:
-        q     = search.lower()
-        items = [i for i in items if q in i["name"].lower() or q in (i["note"] or "").lower()]
-    if show_only_packed:
-        items = [i for i in items if i["checked"]]
-    if show_only_unpacked:
-        items = [i for i in items if not i["checked"]]
-
-    items_sorted = sorted(items, key=lambda x: (x["category"], x["name"]))
-    if not items_sorted:
-        st.info("No items found. Try adjusting your filters.")
-        return
-
-    for cat, group in groupby(items_sorted, key=lambda x: x["category"]):
-        group_list     = list(group)
-        checked_in_cat = sum(1 for i in group_list if i["checked"])
-        st.markdown(
-            f"<div class='cat-header'>{cat} &nbsp;"
-            f"<span style='font-weight:400;font-size:13px;color:#6B7280;'>{checked_in_cat}/{len(group_list)} packed</span></div>",
-            unsafe_allow_html=True
-        )
-        for item in group_list:
-            col_chk, col_info, col_budget, col_del = st.columns([0.5, 7, 2, 0.5])
-            with col_chk:
-                checked = st.checkbox(
-                    label="packed", value=bool(item["checked"]),
-                    key=f"chk_{item['id']}", label_visibility="collapsed"
+        b1, b2 = st.columns(2)
+        with b1:
+            with st.container(border=True):
+                st.markdown("### ⬇️ Download checkpoint")
+                st.markdown("Save a full copy of your packing list as an Excel file.")
+                _items_for_backup = load_items()
+                _excel_backup     = build_excel(_items_for_backup)
+                st.download_button(
+                    label="⬇️ Download checkpoint", data=_excel_backup,
+                    file_name="packing_list_backup.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
                 )
-                if checked != bool(item["checked"]):
-                    toggle_item(item["id"], checked)
-                    st.rerun()
-            with col_info:
-                name_style = "color:#6B7280;text-decoration:line-through;" if item["checked"] else "color:#111827;"
-                note_html  = f"<span style='font-size:12px;color:#9CA3AF;'> — {item['note']}</span>" if item["note"] else ""
-                bg         = "background:#F0FDF4;" if item["checked"] else ""
-                st.markdown(
-                    f"<div style='padding:6px 8px;border-radius:6px;{bg}'>"
-                    f"<span style='font-size:14px;{name_style}'>{item['name']}</span>{note_html}"
-                    f"</div>", unsafe_allow_html=True
-                )
-            with col_budget:
-                new_bud = st.number_input(
-                    "₹", min_value=0.0, step=100.0,
-                    value=float(item.get("budget") or 0),
-                    key=f"bud_{item['id']}", label_visibility="collapsed",
-                    placeholder="₹ Budget"
-                )
-                if new_bud != float(item.get("budget") or 0):
-                    update_budget(item["id"], new_bud)
-                    st.rerun()
-            with col_del:
-                if st.button("🗑", key=f"del_{item['id']}", help="Delete item"):
-                    delete_item(item["id"])
-                    st.rerun()
+        with b2:
+            with st.container(border=True):
+                st.markdown("### ⬆️ Restore from checkpoint")
+                st.markdown("Upload a previously downloaded Excel backup to restore items.")
+                uploaded = st.file_uploader("Choose file", type=["xlsx"], label_visibility="collapsed")
+                if uploaded:
+                    if st.button("✅ Confirm restore", use_container_width=True, type="primary"):
+                        n, msg = restore_from_excel(uploaded)
+                        if n == 0 and msg.startswith(("Could not", "Missing", "No valid")):
+                            st.error(f"Restore failed: {msg}")
+                        else:
+                            if n > 0:
+                                st.success(f"Restored {n} new item(s) successfully!")
+                            if msg:
+                                st.warning(msg)
+                            st.rerun()
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if "logged_in" not in st.session_state:
