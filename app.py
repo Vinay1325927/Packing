@@ -9,7 +9,7 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from pymongo import MongoClient
 from bson import ObjectId
-import extra_streamlit_components as stx
+from streamlit_cookies_controller import CookieController
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
 load_dotenv("credentials/.env")
@@ -32,7 +32,7 @@ COOKIE_EXPIRY = 30  # days
 st.set_page_config(page_title="Study Abroad Packing List", page_icon="🧳", layout="wide")
 
 # ── Cookie manager ────────────────────────────────────────────────────────────
-cookie_manager = stx.CookieManager()
+cookie_manager = CookieController()
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -197,25 +197,22 @@ st.markdown("""
 def check_remember_me_cookie():
     """Read cookie on page load and restore session if valid."""
     if st.session_state.get("logged_in"):
-        return  # already logged in this session
+        return
     try:
         saved_user = cookie_manager.get(COOKIE_NAME)
         if saved_user and saved_user in USERS:
             st.session_state["logged_in"] = True
             st.session_state["username"]  = saved_user
     except Exception:
-        pass  # cookie not readable yet — Streamlit hasn't rendered the component
+        pass
 
 def set_remember_me_cookie(username):
-    cookie_manager.set(
-        COOKIE_NAME,
-        username,
-        max_age=COOKIE_EXPIRY * 24 * 60 * 60,  # seconds
-    )
+    """Write cookie. Must NOT call st.rerun() in the same render cycle."""
+    cookie_manager.set(COOKIE_NAME, username)
 
 def clear_remember_me_cookie():
     try:
-        cookie_manager.delete(COOKIE_NAME)
+        cookie_manager.remove(COOKIE_NAME)
     except Exception:
         pass
 
@@ -235,17 +232,32 @@ def login_screen():
             username    = st.text_input("Username", placeholder="Enter username")
             password    = st.text_input("Password", type="password", placeholder="Enter password")
             remember_me = st.checkbox("Remember me on this device", value=True)
+
             if st.button("Sign in", use_container_width=True, type="primary"):
                 if username in USERS and USERS[username] == password:
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"]  = username
-                    if remember_me:
-                        set_remember_me_cookie(username)
-                    else:
-                        clear_remember_me_cookie()
+                    # Phase 1: mark pending login in session state
+                    st.session_state["pending_login"]   = True
+                    st.session_state["pending_user"]    = username
+                    st.session_state["pending_remember"] = remember_me
                     st.rerun()
                 else:
                     st.error("Incorrect username or password.")
+
+    # Phase 2: on the rerun after button press, write cookie then rerun again
+    if st.session_state.get("pending_login"):
+        username    = st.session_state.pop("pending_user")
+        remember_me = st.session_state.pop("pending_remember")
+        st.session_state.pop("pending_login")
+
+        st.session_state["logged_in"] = True
+        st.session_state["username"]  = username
+
+        if remember_me:
+            set_remember_me_cookie(username)
+        else:
+            clear_remember_me_cookie()
+
+        st.rerun()
 
 # ── Main App ──────────────────────────────────────────────────────────────────
 def main_app():
